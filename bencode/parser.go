@@ -6,7 +6,7 @@ func Decode(r io.Reader) (Value, error) {
     if err != nil {
         return nil, err
     }
-    val, _ := parseValue(data)  // pass []byte directly
+    val, _ := parseValue(data) 
     return val, nil
 }
 
@@ -91,4 +91,33 @@ func parseValue(s []byte) (Value , []byte) {
 	default :
 		return parseString(s)
 	}
+}
+
+func findInfoBytes( data []byte) []byte {
+	idx := -1
+	for i:= 0; i < len(data)-6; i++ {
+		if data[i] == '4' && data[i+1] == ':' && data[i+2] == 'i' && data[i+3] == 'n' && data[i+4] == 'f' && data[i+5] == 'o'{
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return nil
+	}
+	i := idx + 6
+	
+	depth := 0
+	for i< len(data) {
+		if data[i] == 'd' {
+			depth++
+		} else if data[i] == 'e'{
+			depth--
+			if depth == 0 {
+				i++
+				break
+			}
+		}
+		i++
+	}
+	return data[idx:i]
 }
