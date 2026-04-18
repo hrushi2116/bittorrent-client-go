@@ -93,7 +93,7 @@ func parseValue(s []byte) (Value , []byte) {
 	}
 }
 
-func findInfoBytes( data []byte) []byte {
+func FindInfoBytes( data []byte) []byte {
 	idx := -1
 	for i:= 0; i < len(data)-6; i++ {
 		if data[i] == '4' && data[i+1] == ':' && data[i+2] == 'i' && data[i+3] == 'n' && data[i+4] == 'f' && data[i+5] == 'o'{

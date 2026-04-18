@@ -1,28 +1,24 @@
 package main
 
 import (
-    "fmt"
-    "os"
-    "strings"
-    "bittorrent/bencode"
+	"bittorrent/torrent"
+	"fmt"
+	"os"
 )
 
 func main() {
-    if len(os.Args) < 2 {
-        fmt.Println("usage: go run main.go <torrent_file>")
-        return
-    }
+	if len(os.Args) < 2 {
+		fmt.Println("usage: go run main.go <torrent_file>")
+		return
+	}
 
-    data, err := os.ReadFile(os.Args[1])
-    if err != nil {
-        fmt.Println("error reading file:", err)
-        return
-    }
-
-    val , err := bencode.Decode(strings.NewReader(string(data)))
-    if err != nil {
-        fmt.Println("error parsing:" ,err)
-        return
-    }
-    fmt.Printf("%#v\n", val)
+	tf, err := torrent.Open(os.Args[1])
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
+	fmt.Println("Announce:", tf.Announce)
+	fmt.Println("Name:", tf.Info.Name)
+	fmt.Println("Size:", tf.Info.Length)
+	fmt.Printf("Info Hash:", tf.InfoHash)
 }
