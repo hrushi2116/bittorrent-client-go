@@ -1,123 +1,117 @@
 package bencode
 
 import "io"
+
 func Decode(r io.Reader) (Value, error) {
-    data, err := io.ReadAll(r)
-    if err != nil {
-        return nil, err
-    }
-    val, _ := parseValue(data) 
-    return val, nil
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	val, _ := parseValue(data)
+	return val, nil
 }
 
 func parseString(s []byte) (Str, []byte) {
 	colon := 0
-	for i := 0; i<len(s); i++{
+	for i := 0; i < len(s); i++ {
 		if s[i] == ':' {
-			colon = i 
+			colon = i
 			break
 		}
 	}
 
 	length := 0
-	for i:=0; i<colon; i++{
+	for i := 0; i < colon; i++ {
 		digit := int(s[i] - '0')
 		length = length*10 + digit
 	}
 
 	str := make([]byte, length)
-	for i:= colon +1; i< colon+1+length; i++{
+	for i := colon + 1; i < colon+1+length; i++ {
 		str[i-colon-1] = s[i]
 	}
 	remaining := make([]byte, len(s)-colon-1-length)
 	for i := 0; i < len(remaining); i++ {
-    remaining[i] = s[colon+1+length+i]
-	}	
+		remaining[i] = s[colon+1+length+i]
+	}
 
 	return Str(str), remaining
 
 }
 
-func parseInt(s []byte) (Int ,[]byte){
+func parseInt(s []byte) (Int, []byte) {
 	e := 0
-	for i:=1; i<len(s); i++ {
+	for i := 1; i < len(s); i++ {
 		if s[i] == 'e' {
-			e = i 
+			e = i
 			break
 		}
 	}
+	negative := false
+	start := 1
+	if s[1] == '-' {
+		negative = true
+		start = 2
+	}
 	str := 0
-	for i:= 1;i<e;i++ {
+	for i := start; i < e; i++ {
 		digit := int(s[i] - '0')
 		str = str*10 + digit
 	}
+	if negative {
+		str = -str
+	}
 	remaining := make([]byte, len(s)-e-1)
 	for i := 0; i < len(remaining); i++ {
-    remaining[i] = s[e+1+i]
+		remaining[i] = s[e+1+i]
 	}
-	return Int(str) ,remaining
+	return Int(str), remaining
 }
 
-func parseList(s []byte) (List , []byte){
+func parseList(s []byte) (List, []byte) {
 	s = s[1:]
 	var list List
 	for s[0] != 'e' {
-		val , rest := parseValue(s)
-		list = append(list,val)
+		val, rest := parseValue(s)
+		list = append(list, val)
 		s = rest
 	}
-	return list , s[1:]
+	return list, s[1:]
 }
-func parseDict(s []byte) (Dict ,[]byte) {
+func parseDict(s []byte) (Dict, []byte) {
 	s = s[1:]
 	dict := make(Dict)
 	for s[0] != 'e' {
-		key , rest1 := parseString(s)
-		val , rest2 := parseValue(rest1)
+		key, rest1 := parseString(s)
+		val, rest2 := parseValue(rest1)
 		dict[string(key)] = val
 		s = rest2
 	}
 	return dict, s[1:]
 }
 
-func parseValue(s []byte) (Value , []byte) {
+func parseValue(s []byte) (Value, []byte) {
 	switch s[0] {
-	case 'i' :
+	case 'i':
 		return parseInt(s)
-	case 'l' :
+	case 'l':
 		return parseList(s)
-	case 'd' :
+	case 'd':
 		return parseDict(s)
-	default :
+	default:
 		return parseString(s)
 	}
 }
 
-func FindInfoBytes( data []byte) []byte {
-	idx := -1
-	for i:= 0; i < len(data)-6; i++ {
-		if data[i] == '4' && data[i+1] == ':' && data[i+2] == 'i' && data[i+3] == 'n' && data[i+4] == 'f' && data[i+5] == 'o'{
-			idx = i
-			break
+func FindInfoBytes(data []byte) []byte {
+
+	for i := 0; i < len(data)-6; i++ {
+		if data[i] == '4' && data[i+1] == ':' && data[i+2] == 'i' && data[i+3] == 'n' && data[i+4] == 'f' && data[i+5] == 'o' {
+			start := i + 6
+		_, remaining := parseValue(data[start:])
+		end := len(data[start:]) - len(remaining)
+		return data[start:start+end]
 		}
 	}
-	if idx == -1 {
-		return nil
-	}
-	i := idx + 6
-	
-	depth := 0
-	for i< len(data) {
-		if data[i] == 'd' {
-			depth++
-		} else if data[i] == 'e'{
-			depth--
-			if depth == 0 {
-				i++
-				break
-			}
-		}
-		i++
-	}
-	return data[idx:i]
+	return nil
 }

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"bytes"
+	"net/url"
 )
 
 type TorrentFile struct {
@@ -30,12 +32,21 @@ func Open(path string) (TorrentFile, error) {
 		return TorrentFile{}, err
 	}
 	rawInfo := bencode.FindInfoBytes(data)
-	val, err := bencode.Decode(strings.NewReader(string(data)))
+	val, err := bencode.Decode(bytes.NewReader(data))
 	if err != nil {
 		return TorrentFile{}, err
 	}
 	dict := val.(bencode.Dict)
-	announce := dict["announce"].(bencode.Str)
+
+	var announce bencode.Str 
+	if a, ok := dict["announce"]; ok{
+		announce = a.(bencode.Str)
+	} else if ul, ok :=dict["url-list"]; ok {
+		list := ul.(bencode.List)
+		if len(list) > 0 {
+			announce = list[0].(bencode.Str)
+		}
+	}
 	infoDict := dict["info"].(bencode.Dict)
 
 	name := infoDict["name"].(bencode.Str)
@@ -64,14 +75,8 @@ func Open(path string) (TorrentFile, error) {
 func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 	baseURL := tf.Announce
 
-	infoHashEncoded := ""
-	for _, b := range tf.InfoHash {
-		infoHashEncoded += "%" + fmt.Sprintf("%02x", b)
-	}
-	peerIdEncoded := ""
-	for _, b := range peerId {
-		peerIdEncoded += "%" + fmt.Sprintf("%02x", b)
-	}
+	infoHashEncoded := url.QueryEscape(string(tf.InfoHash[:]))
+	peerIdEncoded := url.QueryEscape(string(peerId[:]))
 
 	query := "info_hash=" + infoHashEncoded + "&peer_id=" + peerIdEncoded + "&port=6881&uploaded=0&downloaded=0&left=" + fmt.Sprintf("%d", tf.Info.Length) + "&compact=1"
 
@@ -96,23 +101,37 @@ func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 	}
 	dict := parsed.(bencode.Dict)
 
-	// Debug: print keys
-	for k, v := range dict {
-		fmt.Printf("Key: %s, Value: %v\n", k, v)
-	}
-
 	peersVal, ok := dict["peers"]
 	if !ok {
 		return nil, fmt.Errorf("no peers key in response")
 	}
-	peersData := []byte(peersVal.(bencode.Str))
+	//peersData := []byte(peersVal.(bencode.Str))
 	peerList := []string{}
 
-	for i := 0; i < len(peersData); i += 6 {
-		ip := fmt.Sprintf("%d.%d.%d.%d", peersData[i], peersData[i+1], peersData[i+2], peersData[i+3])
-		port := int(peersData[i+4])*256 + int(peersData[i+5])
-		address := ip + ":" + fmt.Sprintf("%d", port)
-		peerList = append(peerList, address)
+		switch p := peersVal.(type) {
+		case bencode.Str:
+			peersData := []byte(p)
+
+			for i := 0 ; i<len(peersData)-5; i+=6 {
+				ip := fmt.Sprintf("%d.%d.%d.%d" , peersData[i] , peersData[i],peersData[i+1],peersData[i+2],peersData[i+3])
+				port := int(peersData[i+4])*256 +int(peersData[i+5])
+				peerList = append(peerList, ip + ":" + fmt.Sprintf("%d", port))
+			}
+		case bencode.List:
+		// dictionary format
+		for _, peer := range p {
+			peerDict := peer.(bencode.Dict)
+			ip := string(peerDict["ip"].(bencode.Str))
+			port := int(peerDict["port"].(bencode.Int))			
+			// handle IPv6
+			if strings.Contains(ip, ":") {
+				peerList = append(peerList, "["+ip+"]:"+fmt.Sprintf("%d", port))
+			} else {
+				peerList = append(peerList, ip+":"+fmt.Sprintf("%d", port))
+			}
+		}
 	}
 	return peerList, nil
 }
+	
+
