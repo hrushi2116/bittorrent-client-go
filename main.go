@@ -20,5 +20,5 @@ func main() {
 	fmt.Println("Announce:", tf.Announce)
 	fmt.Println("Name:", tf.Info.Name)
 	fmt.Println("Size:", tf.Info.Length)
-	fmt.Printf("Info Hash:", tf.InfoHash)
+	fmt.Printf("Info Hash: %x\n", tf.InfoHash)
 }

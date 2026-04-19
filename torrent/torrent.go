@@ -3,6 +3,9 @@ package torrent
 import (
 	"bittorrent/bencode"
 	"crypto/sha1"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 )
@@ -56,4 +59,60 @@ func Open(path string) (TorrentFile, error) {
 			Length:      int64(Length),
 		},
 	}, nil
+}
+
+func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
+	baseURL := tf.Announce
+
+	infoHashEncoded := ""
+	for _, b := range tf.InfoHash {
+		infoHashEncoded += "%" + fmt.Sprintf("%02x", b)
+	}
+	peerIdEncoded := ""
+	for _, b := range peerId {
+		peerIdEncoded += "%" + fmt.Sprintf("%02x", b)
+	}
+
+	query := "info_hash=" + infoHashEncoded + "&peer_id=" + peerIdEncoded + "&port=6881&uploaded=0&downloaded=0&left=" + fmt.Sprintf("%d", tf.Info.Length) + "&compact=1"
+
+	url := baseURL + "?" + query
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("bad status: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("bad status: %d", resp.StatusCode)
+	}
+
+	parsed, err := bencode.Decode(strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("parse error: %v", err)
+	}
+	dict := parsed.(bencode.Dict)
+
+	// Debug: print keys
+	for k, v := range dict {
+		fmt.Printf("Key: %s, Value: %v\n", k, v)
+	}
+
+	peersVal, ok := dict["peers"]
+	if !ok {
+		return nil, fmt.Errorf("no peers key in response")
+	}
+	peersData := []byte(peersVal.(bencode.Str))
+	peerList := []string{}
+
+	for i := 0; i < len(peersData); i += 6 {
+		ip := fmt.Sprintf("%d.%d.%d.%d", peersData[i], peersData[i+1], peersData[i+2], peersData[i+3])
+		port := int(peersData[i+4])*256 + int(peersData[i+5])
+		address := ip + ":" + fmt.Sprintf("%d", port)
+		peerList = append(peerList, address)
+	}
+	return peerList, nil
 }
