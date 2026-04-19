@@ -21,4 +21,12 @@ func main() {
 	fmt.Println("Name:", tf.Info.Name)
 	fmt.Println("Size:", tf.Info.Length)
 	fmt.Printf("Info Hash: %x\n", tf.InfoHash)
+
+	peers, err := torrent.GetPeers(tf, tf.PeerId, 6881)
+	if err != nil {
+		fmt.Println("error:" ,err)
+		return
+	}
+	fmt.Println("peers:", peers)
+
 }
