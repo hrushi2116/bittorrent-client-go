@@ -2,16 +2,25 @@ package torrent
 
 import (
 	"bittorrent/bencode"
+	"bytes"
 	"crypto/sha1"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
-	"bytes"
-	"net/url"
 )
 
+type PeerConn struct {
+	Conn       net.Conn
+	InfoHash   [20]byte
+	PeerId     [20]byte
+	Choked     bool
+	Unchoked   bool
+	Interested bool
+}
 type TorrentFile struct {
 	Announce string
 	InfoHash [20]byte
@@ -38,10 +47,10 @@ func Open(path string) (TorrentFile, error) {
 	}
 	dict := val.(bencode.Dict)
 
-	var announce bencode.Str 
-	if a, ok := dict["announce"]; ok{
+	var announce bencode.Str
+	if a, ok := dict["announce"]; ok {
 		announce = a.(bencode.Str)
-	} else if ul, ok :=dict["url-list"]; ok {
+	} else if ul, ok := dict["url-list"]; ok {
 		list := ul.(bencode.List)
 		if len(list) > 0 {
 			announce = list[0].(bencode.Str)
@@ -75,10 +84,10 @@ func Open(path string) (TorrentFile, error) {
 func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 	baseURL := tf.Announce
 
-	infoHashEncoded := url.QueryEscape(string(tf.InfoHash[:]))
+	InfoHashEncoded := url.QueryEscape(string(tf.InfoHash[:]))
 	peerIdEncoded := url.QueryEscape(string(peerId[:]))
 
-	query := "info_hash=" + infoHashEncoded + "&peer_id=" + peerIdEncoded + "&port=6881&uploaded=0&downloaded=0&left=" + fmt.Sprintf("%d", tf.Info.Length) + "&compact=1"
+	query := "info_hash=" + InfoHashEncoded + "&peer_id=" + peerIdEncoded + "&port=6881&uploaded=0&downloaded=0&left=" + fmt.Sprintf("%d", tf.Info.Length) + "&compact=1"
 
 	url := baseURL + "?" + query
 
@@ -108,21 +117,21 @@ func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 	//peersData := []byte(peersVal.(bencode.Str))
 	peerList := []string{}
 
-		switch p := peersVal.(type) {
-		case bencode.Str:
-			peersData := []byte(p)
+	switch p := peersVal.(type) {
+	case bencode.Str:
+		peersData := []byte(p)
 
-			for i := 0 ; i<len(peersData)-5; i+=6 {
-				ip := fmt.Sprintf("%d.%d.%d.%d" , peersData[i] , peersData[i],peersData[i+1],peersData[i+2],peersData[i+3])
-				port := int(peersData[i+4])*256 +int(peersData[i+5])
-				peerList = append(peerList, ip + ":" + fmt.Sprintf("%d", port))
-			}
-		case bencode.List:
+		for i := 0; i < len(peersData)-5; i += 6 {
+			ip := fmt.Sprintf("%d.%d.%d.%d", peersData[i], peersData[i], peersData[i+1], peersData[i+2], peersData[i+3])
+			port := int(peersData[i+4])*256 + int(peersData[i+5])
+			peerList = append(peerList, ip+":"+fmt.Sprintf("%d", port))
+		}
+	case bencode.List:
 		// dictionary format
 		for _, peer := range p {
 			peerDict := peer.(bencode.Dict)
 			ip := string(peerDict["ip"].(bencode.Str))
-			port := int(peerDict["port"].(bencode.Int))			
+			port := int(peerDict["port"].(bencode.Int))
 			// handle IPv6
 			if strings.Contains(ip, ":") {
 				peerList = append(peerList, "["+ip+"]:"+fmt.Sprintf("%d", port))
@@ -133,5 +142,37 @@ func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 	}
 	return peerList, nil
 }
-	
 
+func ConnectToPeeer(peerAdr string, InfoHash [20]byte, peerId [20]byte) (*PeerConn, error) {
+
+	handshake := make([]byte, 0, 68)
+	handshake = append(handshake, byte(19))
+	handshake = append(handshake, []byte("BitTorrent protocol")...)
+	handshake = append(handshake, make([]byte, 8)...)
+	handshake = append(handshake, InfoHash[:]...)
+
+	conn, err := net.Dial("tcp", peerAdr)
+	if err != nil {
+		return nil, err
+	}
+	_, err = conn.Write(handshake)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	response := make([]byte, 68)
+	_, err = io.ReadFull(conn, response)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return &PeerConn{
+		Conn:       conn,
+		InfoHash:   InfoHash,
+		PeerId:     peerId,
+		Choked:     true,
+		Unchoked:   false,
+		Interested: false,
+	}, nil
+}
