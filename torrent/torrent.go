@@ -60,13 +60,17 @@ func Open(path string) (TorrentFile, error) {
 
 	name := infoDict["name"].(bencode.Str)
 	pieceLength := infoDict["piece length"].(bencode.Int)
-	Length := infoDict["length"].(bencode.Int)
 	Pieces := infoDict["pieces"].(bencode.Str)
 
 	InfoHash := sha1.Sum(rawInfo)
 
 	peerId := [20]byte{}
 	copy(peerId[:], "-GO0001-000000000000")
+
+	var Length int64
+	if l, ok := infoDict["length"]; ok {
+		Length = int64(l.(bencode.Int))
+	}
 
 	return TorrentFile{
 		Announce: string(announce),
@@ -76,7 +80,7 @@ func Open(path string) (TorrentFile, error) {
 			PieceLength: int64(pieceLength),
 			Pieces:      []byte(Pieces),
 			Name:        string(name),
-			Length:      int64(Length),
+			Length:      Length,
 		},
 	}, nil
 }
@@ -114,7 +118,6 @@ func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("no peers key in response")
 	}
-	//peersData := []byte(peersVal.(bencode.Str))
 	peerList := []string{}
 
 	switch p := peersVal.(type) {
@@ -122,17 +125,15 @@ func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 		peersData := []byte(p)
 
 		for i := 0; i < len(peersData)-5; i += 6 {
-			ip := fmt.Sprintf("%d.%d.%d.%d", peersData[i], peersData[i], peersData[i+1], peersData[i+2], peersData[i+3])
+			ip := fmt.Sprintf("%d.%d.%d.%d", peersData[i], peersData[i+1], peersData[i+2], peersData[i+3])
 			port := int(peersData[i+4])*256 + int(peersData[i+5])
 			peerList = append(peerList, ip+":"+fmt.Sprintf("%d", port))
 		}
 	case bencode.List:
-		// dictionary format
 		for _, peer := range p {
 			peerDict := peer.(bencode.Dict)
 			ip := string(peerDict["ip"].(bencode.Str))
 			port := int(peerDict["port"].(bencode.Int))
-			// handle IPv6
 			if strings.Contains(ip, ":") {
 				peerList = append(peerList, "["+ip+"]:"+fmt.Sprintf("%d", port))
 			} else {
@@ -150,6 +151,7 @@ func ConnectToPeeer(peerAdr string, InfoHash [20]byte, peerId [20]byte) (*PeerCo
 	handshake = append(handshake, []byte("BitTorrent protocol")...)
 	handshake = append(handshake, make([]byte, 8)...)
 	handshake = append(handshake, InfoHash[:]...)
+	handshake = append(handshake, peerId[:]...)
 
 	conn, err := net.Dial("tcp", peerAdr)
 	if err != nil {

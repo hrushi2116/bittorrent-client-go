@@ -24,9 +24,19 @@ func main() {
 
 	peers, err := torrent.GetPeers(tf, tf.PeerId, 6881)
 	if err != nil {
-		fmt.Println("error:" ,err)
+		fmt.Println("error:", err)
 		return
 	}
 	fmt.Println("peers:", peers)
+	for _, peer := range peers {
+		fmt.Println("Trying peer:", peer)
+		err = torrent.Download(tf, peer)
+		if err != nil {
+			fmt.Println("peer failed:", err)
+			continue
+		}
+		fmt.Println("Download complete!")
+		break
+	}
 
 }

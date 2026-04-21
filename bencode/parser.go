@@ -26,11 +26,19 @@ func parseString(s []byte) (Str, []byte) {
 		length = length*10 + digit
 	}
 
+	if colon+1+length > len(s) {
+		return Str(""), s
+	}
+
 	str := make([]byte, length)
 	for i := colon + 1; i < colon+1+length; i++ {
 		str[i-colon-1] = s[i]
 	}
-	remaining := make([]byte, len(s)-colon-1-length)
+	remLen := len(s) - colon - 1 - length
+	if remLen < 0 {
+		remLen = 0
+	}
+	remaining := make([]byte, remLen)
 	for i := 0; i < len(remaining); i++ {
 		remaining[i] = s[colon+1+length+i]
 	}
@@ -71,7 +79,7 @@ func parseInt(s []byte) (Int, []byte) {
 func parseList(s []byte) (List, []byte) {
 	s = s[1:]
 	var list List
-	for s[0] != 'e' {
+	for len(s) > 0 && s[0] != 'e' {
 		val, rest := parseValue(s)
 		list = append(list, val)
 		s = rest
@@ -81,7 +89,7 @@ func parseList(s []byte) (List, []byte) {
 func parseDict(s []byte) (Dict, []byte) {
 	s = s[1:]
 	dict := make(Dict)
-	for s[0] != 'e' {
+	for len(s) > 0 && s[0] != 'e' {
 		key, rest1 := parseString(s)
 		val, rest2 := parseValue(rest1)
 		dict[string(key)] = val
@@ -91,6 +99,9 @@ func parseDict(s []byte) (Dict, []byte) {
 }
 
 func parseValue(s []byte) (Value, []byte) {
+	if len(s) == 0 {
+		return nil, s
+	}
 	switch s[0] {
 	case 'i':
 		return parseInt(s)
@@ -108,9 +119,9 @@ func FindInfoBytes(data []byte) []byte {
 	for i := 0; i < len(data)-6; i++ {
 		if data[i] == '4' && data[i+1] == ':' && data[i+2] == 'i' && data[i+3] == 'n' && data[i+4] == 'f' && data[i+5] == 'o' {
 			start := i + 6
-		_, remaining := parseValue(data[start:])
-		end := len(data[start:]) - len(remaining)
-		return data[start:start+end]
+			_, remaining := parseValue(data[start:])
+			end := len(data[start:]) - len(remaining)
+			return data[start : start+end]
 		}
 	}
 	return nil
