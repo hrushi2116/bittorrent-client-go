@@ -28,15 +28,12 @@ func main() {
 		return
 	}
 	fmt.Println("peers:", peers)
-	for _, peer := range peers {
-		fmt.Println("Trying peer:", peer)
-		err = torrent.Download(tf, peer)
-		if err != nil {
-			fmt.Println("  peer failed:", err)
-			continue
-		}
-		fmt.Println("Download complete!")
-		break
+
+	err = torrent.DownloadParallel(tf, peers)
+	if err != nil {
+		fmt.Println("Download failed:", err)
+		return
 	}
+	fmt.Println("Download complete!")
 
 }

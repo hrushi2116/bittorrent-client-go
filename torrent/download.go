@@ -15,10 +15,10 @@ func sendIntrested(conn net.Conn) error {
 	msg := make([]byte, 5)
 	binary.BigEndian.PutUint32(msg[:4], 1)
 	msg[4] = 2
-
 	_, err := conn.Write(msg)
 	return err
 }
+
 func sendRequest(conn net.Conn, index uint32, begin uint32, length uint32) error {
 	msg := make([]byte, 17)
 	binary.BigEndian.PutUint32(msg[0:4], 13)
@@ -29,10 +29,14 @@ func sendRequest(conn net.Conn, index uint32, begin uint32, length uint32) error
 	_, err := conn.Write(msg)
 	return err
 }
+
 func readPiece(conn net.Conn) (uint32, uint32, []byte, error) {
 	for {
 		lengthBuf := make([]byte, 4)
-		io.ReadFull(conn, lengthBuf)
+		_, err := io.ReadFull(conn, lengthBuf)
+		if err != nil {
+			return 0, 0, nil, err
+		}
 		msgLength := binary.BigEndian.Uint32(lengthBuf)
 
 		if msgLength == 0 {
@@ -40,11 +44,13 @@ func readPiece(conn net.Conn) (uint32, uint32, []byte, error) {
 		}
 
 		remaining := make([]byte, msgLength)
-		io.ReadFull(conn, remaining)
+		_, err = io.ReadFull(conn, remaining)
+		if err != nil {
+			return 0, 0, nil, err
+		}
 
 		switch remaining[0] {
 		case 0, 1, 2, 3, 4, 5, 8:
-			fmt.Println("readPiece: msg id:", remaining[0])
 			continue
 		case 7:
 			pieceIndex := binary.BigEndian.Uint32(remaining[1:5])
@@ -56,11 +62,13 @@ func readPiece(conn net.Conn) (uint32, uint32, []byte, error) {
 		}
 	}
 }
+
 func verifyPiece(tf *TorrentFile, pieceIndex uint32, data []byte) bool {
 	expected := tf.Info.Pieces[pieceIndex*20 : pieceIndex*20+20]
 	hash := sha1.Sum(data)
 	return bytes.Equal(hash[:], expected)
 }
+
 func writePiece(tf *TorrentFile, pieceIndex uint32, data []byte) error {
 	offset := int64(pieceIndex) * tf.Info.PieceLength
 	f, err := os.OpenFile(tf.Info.Name, os.O_WRONLY|os.O_CREATE, 0644)
@@ -71,60 +79,87 @@ func writePiece(tf *TorrentFile, pieceIndex uint32, data []byte) error {
 	f.Close()
 	return err
 }
+
+func getDownloadedPieces(tf *TorrentFile) ([]bool, error) {
+	numPieces := int(tf.Info.Length) / int(tf.Info.PieceLength)
+	if tf.Info.Length%int64(tf.Info.PieceLength) != 0 {
+		numPieces++
+	}
+	downloaded := make([]bool, numPieces)
+
+	info, err := os.Stat(tf.Info.Name)
+	if err != nil {
+		return downloaded, nil
+	}
+
+	downloadedSize := info.Size()
+	for i := 0; i < numPieces; i++ {
+		pieceStart := int64(i) * tf.Info.PieceLength
+		if downloadedSize >= pieceStart+tf.Info.PieceLength {
+			downloaded[i] = true
+		} else if downloadedSize >= pieceStart {
+			break
+		}
+	}
+
+	return downloaded, nil
+}
+
 func DownloadParallel(tf TorrentFile, peerAddrs []string) error {
 	if len(peerAddrs) == 0 {
 		return fmt.Errorf("no peers provided")
 	}
-	if len(peerAddrs) > 5 {
-		peerAddrs = peerAddrs[:5]
+	fmt.Printf("Connecting to %d peers...\n", len(peerAddrs))
+
+	type result struct {
+		pc   *PeerConn
+		addr string
+		err  error
 	}
 
-	peerConns := make([]*PeerConn, len(peerAddrs))
-	for i, addr := range peerAddrs {
-		pc, err := ConnectToPeeer(addr, tf.InfoHash, tf.PeerId)
-		if err != nil {
+	results := make(chan result, len(peerAddrs))
+	for _, addr := range peerAddrs {
+		addr := addr
+		go func() {
+			pc, err := ConnectToPeeer(addr, tf.InfoHash, tf.PeerId)
+			results <- result{pc, addr, err}
+		}()
+	}
+
+	peerConns := make([]*PeerConn, 0, len(peerAddrs))
+	for i := 0; i < len(peerAddrs); i++ {
+		r := <-results
+		if r.err != nil {
 			continue
 		}
-		peerConns[i] = pc
+		sendIntrested(r.pc.Conn)
+		peerConns = append(peerConns, r.pc)
+		fmt.Printf("  connected: %s\n", r.addr)
 	}
 
-	activeConns := 0
-	for _, pc := range peerConns {
-		if pc != nil {
-			activeConns++
-			sendIntrested(pc.Conn)
-		}
-	}
-	if activeConns == 0 {
+	if len(peerConns) == 0 {
 		return fmt.Errorf("could not connect to any peers")
 	}
+	fmt.Printf("Connected to %d peers\n", len(peerConns))
 
-	for _, pc := range peerConns {
-		if pc == nil {
-			continue
-		}
-		for {
-			msg := make([]byte, 4)
-			io.ReadFull(pc.Conn, msg)
-			length := binary.BigEndian.Uint32(msg)
-			if length == 0 {
-				continue
-			}
-			payload := make([]byte, length)
-			io.ReadFull(pc.Conn, payload)
-			if payload[0] == 1 {
-				break
-			}
-		}
-	}
-
+	activeConns := len(peerConns)
 	numPieces := int(tf.Info.Length) / int(tf.Info.PieceLength)
 	if tf.Info.Length%int64(tf.Info.PieceLength) != 0 {
 		numPieces++
 	}
 	const blockSize = 16384
 
+	downloaded, _ := getDownloadedPieces(&tf)
+	startPiece := 0
 	for i := 0; i < numPieces; i++ {
+		if !downloaded[i] {
+			startPiece = i
+			break
+		}
+	}
+	fmt.Printf("Resuming from piece %d\n", startPiece)
+
+	for i := startPiece; i < numPieces; i++ {
 		pieceLength := int(tf.Info.PieceLength)
 		if i == numPieces-1 && tf.Info.Length%int64(tf.Info.PieceLength) != 0 {
 			pieceLength = int(tf.Info.Length % int64(tf.Info.PieceLength))
@@ -139,24 +174,25 @@ func DownloadParallel(tf TorrentFile, peerAddrs []string) error {
 			}
 
 			peerIdx := i % activeConns
-			for peerConns[peerIdx] == nil {
-				peerIdx = (peerIdx + 1) % activeConns
-			}
 
+			peerConns[peerIdx].Conn.SetDeadline(time.Now().Add(120 * time.Second))
 			err := sendRequest(peerConns[peerIdx].Conn, uint32(i), uint32(offset), uint32(reqLen))
 			if err != nil {
 				return err
 			}
+			peerConns[peerIdx].Conn.SetDeadline(time.Now().Add(120 * time.Second))
 			_, _, data, err := readPiece(peerConns[peerIdx].Conn)
 			if err != nil {
 				return err
 			}
 			pieceData = append(pieceData, data...)
+			fmt.Printf("Got block: piece=%d, begin=%d, len=%d\n", i, offset, len(data))
 		}
 
 		if !verifyPiece(&tf, uint32(i), pieceData) {
 			return fmt.Errorf("piece %d failed verification", i)
 		}
+		fmt.Printf("piece %d complete (%d bytes) - verified!\n", i, len(pieceData))
 		err := writePiece(&tf, uint32(i), pieceData)
 		if err != nil {
 			return err
@@ -164,9 +200,7 @@ func DownloadParallel(tf TorrentFile, peerAddrs []string) error {
 	}
 
 	for _, pc := range peerConns {
-		if pc != nil {
-			pc.Conn.Close()
-		}
+		pc.Conn.Close()
 	}
 	return nil
 }
@@ -199,7 +233,6 @@ func Download(tf TorrentFile, peerAddr string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Unchoke loop: msg id=%d, len=%d\n", payload[0], length)
 		if payload[0] == 1 {
 			break
 		}
@@ -210,7 +243,21 @@ func Download(tf TorrentFile, peerAddr string) error {
 	}
 	const blockSize = 16384
 
+	downloaded, err := getDownloadedPieces(&tf)
+	if err != nil {
+		return err
+	}
+	startPiece := 0
 	for i := 0; i < numPieces; i++ {
+		if !downloaded[i] {
+			startPiece = i
+			break
+		}
+	}
+
+	fmt.Printf("Resuming from piece %d\n", startPiece)
+
+	for i := startPiece; i < numPieces; i++ {
 		pieceLength := int(tf.Info.PieceLength)
 		if i == numPieces-1 && tf.Info.Length%int64(tf.Info.PieceLength) != 0 {
 			pieceLength = int(tf.Info.Length % int64(tf.Info.PieceLength))
@@ -224,22 +271,24 @@ func Download(tf TorrentFile, peerAddr string) error {
 				reqLen = pieceLength - offset
 			}
 
+			pc.Conn.SetDeadline(time.Now().Add(120 * time.Second))
 			err = sendRequest(pc.Conn, uint32(i), uint32(offset), uint32(reqLen))
 			if err != nil {
 				return err
 			}
-			_, begin, data, err := readPiece(pc.Conn)
-			fmt.Printf("Got block: piece=%d, begin=%d, len=%d\n", i, begin, len(data))
+			pc.Conn.SetDeadline(time.Now().Add(120 * time.Second))
+			_, _, data, err := readPiece(pc.Conn)
 			if err != nil {
 				return err
 			}
 			pieceData = append(pieceData, data...)
+			fmt.Printf("Got block: piece=%d, begin=%d, len=%d\n", i, offset, len(data))
 		}
 
-		fmt.Printf("Piece %d complete (len=%d)\n", i, len(pieceData))
 		if !verifyPiece(&tf, uint32(i), pieceData) {
 			return fmt.Errorf("piece %d failed verification", i)
 		}
+		fmt.Printf("piece %d complete (%d bytes) - verified!\n", i, len(pieceData))
 		err = writePiece(&tf, uint32(i), pieceData)
 		if err != nil {
 			return err
