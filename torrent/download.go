@@ -109,7 +109,7 @@ func DownloadParallel(tf TorrentFile, peerAddrs []string) error {
 	if len(peerAddrs) == 0 {
 		return fmt.Errorf("no peers provided")
 	}
-	fmt.Printf("Connecting to %d peers...\n", len(peerAddrs))
+	fmt.Println("Connecting to peers...")
 
 	type result struct {
 		pc   *PeerConn
@@ -134,7 +134,6 @@ func DownloadParallel(tf TorrentFile, peerAddrs []string) error {
 		}
 		sendIntrested(r.pc.Conn)
 		peerConns = append(peerConns, r.pc)
-		fmt.Printf("  connected: %s\n", r.addr)
 	}
 
 	if len(peerConns) == 0 {
@@ -178,12 +177,54 @@ func DownloadParallel(tf TorrentFile, peerAddrs []string) error {
 			peerConns[peerIdx].Conn.SetDeadline(time.Now().Add(120 * time.Second))
 			err := sendRequest(peerConns[peerIdx].Conn, uint32(i), uint32(offset), uint32(reqLen))
 			if err != nil {
-				return err
+				fmt.Printf("peer disconnected, reconnecting...\n")
+				peerConns[peerIdx] = nil
+				for attempts := 0; attempts < 3; attempts++ {
+					for _, addr := range peerAddrs {
+						pc, err := ConnectToPeeer(addr, tf.InfoHash, tf.PeerId)
+						if err != nil {
+							continue
+						}
+						sendIntrested(pc.Conn)
+						peerConns = append(peerConns, pc)
+						activeConns = len(peerConns)
+						break
+					}
+				}
+				peerIdx = i % activeConns
+				peerConns[peerIdx].Conn.SetDeadline(time.Now().Add(120 * time.Second))
+				err := sendRequest(peerConns[peerIdx].Conn, uint32(i), uint32(offset), uint32(reqLen))
+				if err != nil {
+					return err
+				}
 			}
 			peerConns[peerIdx].Conn.SetDeadline(time.Now().Add(120 * time.Second))
 			_, _, data, err := readPiece(peerConns[peerIdx].Conn)
 			if err != nil {
-				return err
+				fmt.Printf("peer died, reconnecting...\n")
+				peerConns[peerIdx] = nil
+				peerIdx = (peerIdx + 1) % len(peerConns)
+				if peerConns[peerIdx] == nil {
+					for _, addr := range peerAddrs {
+						pc, err := ConnectToPeeer(addr, tf.InfoHash, tf.PeerId)
+						if err != nil {
+							continue
+						}
+						sendIntrested(pc.Conn)
+						peerConns[peerIdx] = pc
+						break
+					}
+				}
+				peerConns[peerIdx].Conn.SetDeadline(time.Now().Add(120 * time.Second))
+				err := sendRequest(peerConns[peerIdx].Conn, uint32(i), uint32(offset), uint32(reqLen))
+				if err != nil {
+					return err
+				}
+				peerConns[peerIdx].Conn.SetDeadline(time.Now().Add(120 * time.Second))
+				_, _, data, err = readPiece(peerConns[peerIdx].Conn)
+				if err != nil {
+					return err
+				}
 			}
 			pieceData = append(pieceData, data...)
 			fmt.Printf("Got block: piece=%d, begin=%d, len=%d\n", i, offset, len(data))

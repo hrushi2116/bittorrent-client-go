@@ -27,7 +27,7 @@ func main() {
 		fmt.Println("error:", err)
 		return
 	}
-	fmt.Println("peers:", peers)
+	fmt.Printf("Found %d peers\n", len(peers))
 
 	err = torrent.DownloadParallel(tf, peers)
 	if err != nil {
