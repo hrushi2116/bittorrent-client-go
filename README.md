@@ -34,7 +34,7 @@ Peer:    [2001:41d0:1004:265d::1]:31812
 
 **Build:**
 ```bash
-git clone https://github.com/yourusername/bittorrent-client-go
+git clone https://github.com/hrushi2116/bittorrent-client-go
 cd bittorrent-client-go
 go build .
 ```
