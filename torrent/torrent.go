@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type PeerConn struct {
@@ -108,7 +109,7 @@ func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 		return nil, fmt.Errorf("bad status: %d", resp.StatusCode)
 	}
 
-	parsed, err := bencode.Decode(strings.NewReader(string(body)))
+	parsed, err := bencode.Decode(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("parse error: %v", err)
 	}
@@ -131,9 +132,20 @@ func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 		}
 	case bencode.List:
 		for _, peer := range p {
-			peerDict := peer.(bencode.Dict)
-			ip := string(peerDict["ip"].(bencode.Str))
-			port := int(peerDict["port"].(bencode.Int))
+			peerDict, ok := peer.(bencode.Dict)
+			if !ok {
+				continue
+			}
+			ipVal, ok := peerDict["ip"].(bencode.Str)
+			if !ok {
+				continue
+			}
+			ip := string(ipVal)
+			portVal, ok := peerDict["port"].(bencode.Int)
+			if !ok {
+				continue
+			}
+			port := int(portVal)
 			if strings.Contains(ip, ":") {
 				peerList = append(peerList, "["+ip+"]:"+fmt.Sprintf("%d", port))
 			} else {
@@ -145,6 +157,12 @@ func GetPeers(tf TorrentFile, peerId [20]byte, port int) ([]string, error) {
 }
 
 func ConnectToPeeer(peerAdr string, InfoHash [20]byte, peerId [20]byte) (*PeerConn, error) {
+	d := &net.Dialer{Timeout: 5 * time.Second}
+	conn, err := d.Dial("tcp", peerAdr)
+	if err != nil {
+		return nil, err
+	}
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	handshake := make([]byte, 0, 68)
 	handshake = append(handshake, byte(19))
@@ -153,10 +171,6 @@ func ConnectToPeeer(peerAdr string, InfoHash [20]byte, peerId [20]byte) (*PeerCo
 	handshake = append(handshake, InfoHash[:]...)
 	handshake = append(handshake, peerId[:]...)
 
-	conn, err := net.Dial("tcp", peerAdr)
-	if err != nil {
-		return nil, err
-	}
 	_, err = conn.Write(handshake)
 	if err != nil {
 		conn.Close()

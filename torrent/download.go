@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"time"
 )
 
 func sendIntrested(conn net.Conn) error {
@@ -70,12 +71,112 @@ func writePiece(tf *TorrentFile, pieceIndex uint32, data []byte) error {
 	f.Close()
 	return err
 }
+func DownloadParallel(tf TorrentFile, peerAddrs []string) error {
+	if len(peerAddrs) == 0 {
+		return fmt.Errorf("no peers provided")
+	}
+	if len(peerAddrs) > 5 {
+		peerAddrs = peerAddrs[:5]
+	}
+
+	peerConns := make([]*PeerConn, len(peerAddrs))
+	for i, addr := range peerAddrs {
+		pc, err := ConnectToPeeer(addr, tf.InfoHash, tf.PeerId)
+		if err != nil {
+			continue
+		}
+		peerConns[i] = pc
+	}
+
+	activeConns := 0
+	for _, pc := range peerConns {
+		if pc != nil {
+			activeConns++
+			sendIntrested(pc.Conn)
+		}
+	}
+	if activeConns == 0 {
+		return fmt.Errorf("could not connect to any peers")
+	}
+
+	for _, pc := range peerConns {
+		if pc == nil {
+			continue
+		}
+		for {
+			msg := make([]byte, 4)
+			io.ReadFull(pc.Conn, msg)
+			length := binary.BigEndian.Uint32(msg)
+			if length == 0 {
+				continue
+			}
+			payload := make([]byte, length)
+			io.ReadFull(pc.Conn, payload)
+			if payload[0] == 1 {
+				break
+			}
+		}
+	}
+
+	numPieces := int(tf.Info.Length) / int(tf.Info.PieceLength)
+	if tf.Info.Length%int64(tf.Info.PieceLength) != 0 {
+		numPieces++
+	}
+	const blockSize = 16384
+
+	for i := 0; i < numPieces; i++ {
+		pieceLength := int(tf.Info.PieceLength)
+		if i == numPieces-1 && tf.Info.Length%int64(tf.Info.PieceLength) != 0 {
+			pieceLength = int(tf.Info.Length % int64(tf.Info.PieceLength))
+		}
+
+		pieceData := make([]byte, 0, pieceLength)
+
+		for offset := 0; offset < pieceLength; offset += blockSize {
+			reqLen := blockSize
+			if offset+reqLen > pieceLength {
+				reqLen = pieceLength - offset
+			}
+
+			peerIdx := i % activeConns
+			for peerConns[peerIdx] == nil {
+				peerIdx = (peerIdx + 1) % activeConns
+			}
+
+			err := sendRequest(peerConns[peerIdx].Conn, uint32(i), uint32(offset), uint32(reqLen))
+			if err != nil {
+				return err
+			}
+			_, _, data, err := readPiece(peerConns[peerIdx].Conn)
+			if err != nil {
+				return err
+			}
+			pieceData = append(pieceData, data...)
+		}
+
+		if !verifyPiece(&tf, uint32(i), pieceData) {
+			return fmt.Errorf("piece %d failed verification", i)
+		}
+		err := writePiece(&tf, uint32(i), pieceData)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, pc := range peerConns {
+		if pc != nil {
+			pc.Conn.Close()
+		}
+	}
+	return nil
+}
+
 func Download(tf TorrentFile, peerAddr string) error {
 	pc, err := ConnectToPeeer(peerAddr, tf.InfoHash, tf.PeerId)
 	if err != nil {
 		return err
 	}
-	// pc.Conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	pc.Conn.SetDeadline(time.Now().Add(120 * time.Second))
 	defer pc.Conn.Close()
 	fmt.Println("Connected to peer")
 	err = sendIntrested(pc.Conn)

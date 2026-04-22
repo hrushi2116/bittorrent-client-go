@@ -32,7 +32,7 @@ func main() {
 		fmt.Println("Trying peer:", peer)
 		err = torrent.Download(tf, peer)
 		if err != nil {
-			fmt.Println("peer failed:", err)
+			fmt.Println("  peer failed:", err)
 			continue
 		}
 		fmt.Println("Download complete!")
